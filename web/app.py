@@ -1,47 +1,9 @@
-"""from flask import Flask, request, jsonify, render_template
-import paho.mqtt.client as mqtt
-import os, json
-
-BROKER   = "147.93.127.215"
-PORT     = 1883
-USER     = os.getenv("MQTT_USER", "iotuser")
-PASSWORD = os.getenv("MQTT_PASS", "secretpass")
-
-mqttc = mqtt.Client(callback_api_version=1)
-mqttc.username_pw_set(USER, PASSWORD)
-mqttc.connect(BROKER, PORT)
-mqttc.loop_start()           # background thread
-
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    # pass the device id down to the template
-    return render_template("index.html", device_id="esp32-123")
-
-@app.route("/api/gpio", methods=["POST"])
-def queue_cmd():
-    data = request.get_json(force=True)       # ← JSON or 400
-    dev, pin, state = data.get("device"), data.get("pin"), data.get("state")
-    if None in (dev, pin, state):
-        return {"error": "device, pin, state required"}, 400
-
-    topic   = f"devices/{dev}/cmd"
-    payload = json.dumps({"pin": int(pin), "state": int(state)})
-    mqttc.publish(topic, payload, qos=1)
-    return {"queued": True}, 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)     # debug=auto-reload"""
-
 # app.py
-from flask import Flask, request, jsonify, render_template, redirect, url_for, session, flash, send_file
+from flask import Flask, request, jsonify, render_template, redirect, url_for, session, flash, send_file, abort
 import paho.mqtt.client as mqtt
 import os, json, threading, time, uuid
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime          # for precise UTC timestamps
 from datetime import datetime, timedelta, UTC   # NEW
-from datetime import datetime, timedelta, UTC   # Python 3.11+
 from datetime import timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import String, Integer 
@@ -55,8 +17,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from functools import wraps
-from flask import abort
-from flask import flash
+
+
 
 db = SQLAlchemy()                       # create the global handle
 
@@ -252,22 +214,6 @@ def admin_required(fn):
         return fn(*args, **kwargs)
     return wrapper
 
-"""
-def purge_stale_devices():
-    while True:
-        time.sleep(600)                               # run every 10 min
-        cutoff = utc_now() - timedelta(hours=24)
-        with devices_lock:
-            stale = [d for d, info in devices.items()
-                     if info["status"] == "offline" and info["ts"] < cutoff]
-            for d in stale:
-                devices.pop(d, None)
-        if stale:
-            print(f"[DEV] purged {len(stale)} devices offline >24 h")
-
-threading.Thread(target=purge_stale_devices,
-                 daemon=True).start()
-"""
 
 def purge_stale_devices():
     while True:
@@ -334,19 +280,6 @@ def build_settings_array(form):
     ]
 
 
-"""
-def touch_device(dev_id: str, status: str):
-    now = utc_now()
-    with app.app_context():                       # ensure context in MQTT thread
-        d = Device.query.filter_by(device_id=dev_id).first()
-        if not d:
-            d = Device(device_id=dev_id, status=status, last_seen=now)
-            db.session.add(d)
-        else:
-            d.status    = status
-            d.last_seen = now
-        db.session.commit()
-"""
 def _history_df(device_id: str, start_ts: float, end_ts: float):
     rows = (TelemetryRecord.query
             .filter(TelemetryRecord.device_id == device_id,
@@ -383,62 +316,6 @@ def touch_device(dev_id: str, status: str):
 
         db.session.commit()
 
-
-
-"""
-@app.route("/")
-def select_device():
-    # Show page listing all online devices
-    with devices_lock:
-        dev_list = dict(devices)
-    return render_template("devices.html", devices=dev_list)
-"""
-"""
-@app.route("/")
-def select_device():
-    with devices_lock:
-        dev_list = {d: info["status"] for d, info in devices.items()}
-    return render_template("devices.html", devices=dev_list)
-"""
-"""
-@app.route("/")
-def select_device():
-    now = utc_now()
-    with devices_lock:
-        dev_list = {
-            d: {
-                "status": info["status"],
-                "last_seen": int((now - info["ts"]).total_seconds())
-            }
-            for d, info in devices.items()
-        }
-    return render_template("devices.html", devices=dev_list)
-"""
-
-
-"""
-@app.route("/")
-def select_device():
-    now = utc_now()                  # aware
-    rows = Device.query.all()
-
-    dev_list = {}
-    for row in rows:
-        # ── handle None or naïve timestamps safely ──
-        if row.last_seen is None:
-            last_seen_dt = utc_now()             # treat as "just now"
-        elif row.last_seen.tzinfo is None:
-            last_seen_dt = row.last_seen.replace(tzinfo=timezone.utc)
-        else:
-            last_seen_dt = row.last_seen
-
-        dev_list[row.device_id] = {
-            "status"    : row.status,
-            "last_seen" : int((now - last_seen_dt).total_seconds())
-        }
-
-    return render_template("devices.html", devices=dev_list)
-"""
 
 @app.route("/")
 def select_device():
@@ -497,19 +374,6 @@ def device_history(device_id):
                            device_id=device_id,
                            records=records)
 
-"""
-@app.route("/device/<device_id>/history")
-def device_history(device_id):
-    cutoff = datetime.utcnow() - timedelta(hours=8)
-    records = (TelemetryRecord.query
-               .filter(TelemetryRecord.device_id == device_id,
-                       TelemetryRecord.ts >= cutoff)
-               .order_by(TelemetryRecord.ts.desc())
-               .all())
-    return render_template("history.html",
-                           device_id=device_id,
-                           records=records)
-"""
 
 # latest 500 samples (oldest→newest) as raw JSON
 @app.route("/api/history/<device_id>")
@@ -527,6 +391,7 @@ def get_history_json(device_id):
         "temperature": r.temperature
     } for r in rows]
     return jsonify(data)
+
 
 @app.route("/api/export/<fmt>/<device_id>")
 def export_history(fmt, device_id):
@@ -649,71 +514,6 @@ def api_ota_bulk():
     return {"started": True, "job_id": job_id, "targets": dev_ids}, 202
 
 
-
-"""
-@app.route('/signup', methods=['GET','POST'])
-def signup():
-    if request.method == 'POST':
-        fn = request.form.get('first_name','').strip()
-        ln = request.form.get('last_name','').strip()
-        email = request.form.get('email','').strip().lower()
-        pw = request.form.get('password','')
-        cpw = request.form.get('confirm_password','')
-        sec = request.form.get('security_number','')
-        
-        # Validation
-        if not all([fn,ln,email,pw,cpw,sec]):
-            flash('All fields are required','error')
-        elif sec != '1234':
-            flash('Invalid signup security number','error')
-        elif pw != cpw:
-            flash('Passwords do not match','error')
-        elif email in users:
-            flash('Email already registered','error')
-        else:
-            # In real life, hash pw! Here store plain for demo
-            users[email] = {'first':fn,'last':ln,'pw':pw}
-            flash('Registration successful. Please log in.','success')
-            return redirect(url_for('login'))
-    return render_template('signup.html')
-"""
-"""
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    if request.method == 'POST':
-        fn    = request.form.get('first_name','').strip()
-        ln    = request.form.get('last_name','').strip()
-        email = request.form.get('email','').strip().lower()
-        pw    = request.form.get('password','')
-        cpw   = request.form.get('confirm_password','')
-        sec   = request.form.get('security_number','')
-
-        # basic validation
-        if not all([fn, ln, email, pw, cpw, sec]):
-            flash('All fields are required', 'error')
-        elif sec != '1234':
-            flash('Invalid signup security number', 'error')
-        elif pw != cpw:
-            flash('Passwords do not match', 'error')
-        elif User.query.filter_by(email=email).first():
-            flash('Email already registered', 'error')
-        else:
-            new_user = User(
-                email   = email,
-                first   = fn,
-                last    = ln,
-                pw_hash = generate_password_hash(pw)
-            )
-            db.session.add(new_user)
-            db.session.commit()
-            flash('Registration successful. Please log in.', 'success')
-            return redirect(url_for('login'))
-
-    return render_template('signup.html')
-"""
-
-
-
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
@@ -760,22 +560,6 @@ def signup():
     return render_template('signup.html')
 
 
-
-"""
-@app.route('/login', methods=['GET','POST'])
-def login():
-    if request.method == 'POST':
-        email = request.form.get('email','').strip().lower()
-        pw = request.form.get('password','')
-        user = users.get(email)
-        if not user or user['pw'] != pw:
-            flash('Invalid email/password','error')
-        else:
-            session['user_email'] = email
-            return redirect(url_for('select_device'))
-    return render_template('login.html')
-"""
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -790,13 +574,7 @@ def login():
             return redirect(url_for('select_device'))
 
     return render_template('login.html')
-"""
-@app.route("/users")
-@admin_required
-def list_users():
-    users = User.query.filter_by(role="user").all()
-    return render_template("users.html", users=users)
-"""
+
 
 @app.route("/api/modbus/<device_id>")
 def get_modbus(device_id):
@@ -804,47 +582,6 @@ def get_modbus(device_id):
         data = modbus.get(device_id)
     return (jsonify(data) if data else ("{}", 404))
 
-"""
-@app.route("/device/<device_id>/settings", methods=["GET", "POST"])
-def device_settings(device_id):
-    # permission check same as control_device
-    user = User.query.filter_by(email=session.get('user_email')).first()
-    if user is None:
-        return redirect(url_for('login'))
-    if user.role == "user":
-        with UserDevice.query.filter_by(user_id=user.id, device_id=device_id) as ud:
-            if ud.first() is None:
-                return redirect(url_for('select_device'))
-
-    if request.method == "POST":
-        # gather form values and publish via MQTT
-        payload = {
-            "mode":        request.form["mode"],
-            "max_charge":  request.form["max_charge"],
-            "offgrid":     request.form["offgrid"],
-            "rtc":         request.form["rtc"],
-            "w1_start":    request.form["w1_start"],
-            "w1_end":      request.form["w1_end"],
-            "w2_start":    request.form["w2_start"],
-            "w2_end":      request.form["w2_end"],
-        }
-        mqttc.publish(f"devices/{device_id}/modbus_set",
-                      json.dumps(payload), qos=1)
-        # NEW: remember what we just pushed
-        with settings_lock:
-            settings_cache[device_id] = payload
-
-        flash("Settings pushed", "success")
-        return redirect(url_for('device_settings', device_id=device_id))
-    
-    with settings_lock:
-        cfg = settings_cache.get(device_id, {})   # {} if nothing yet
-
-    # GET: you could query current settings; here we just send blanks
-    return render_template("device_settings.html",
-                           device_id=device_id,
-                           cfg={})
-"""
 
 @app.route("/device/<device_id>/settings", methods=["GET", "POST"])
 def device_settings(device_id):
@@ -876,7 +613,6 @@ def device_settings(device_id):
     return render_template("device_settings.html",
                            device_id=device_id,
                            cfg=cfg)
-
 
  
 @app.route("/api/gwcan/<device_id>")
@@ -936,16 +672,6 @@ def ago(seconds: int) -> str:
         return f"{hrs} h{'s' if hrs > 1 else ''}"
 
 
-"""
-# Protect your existing dashboard routes:
-@app.before_request
-def require_login():
-    auth_paths = ['/login','/signup','/static/','/api/telemetry']
-    if any(request.path.startswith(p) for p in auth_paths):
-        return
-    if 'user_email' not in session:
-        return redirect(url_for('login'))
-"""
 @app.before_request
 def require_login():
     auth_paths = ['/login', '/signup', '/static/', '/api/telemetry']
